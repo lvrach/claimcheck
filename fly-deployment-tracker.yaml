@@ -1,0 +1,35 @@
+project: claimcheck
+updated_at_utc: "2026-02-22T19:21:00Z"
+
+deployment:
+  status: deployed
+  platform: fly.io
+  app_name: claimcheck
+  org: personal
+  region: iad
+  public_url: https://claimcheck.fly.dev/
+  monitoring_url: https://fly.io/apps/claimcheck/monitoring
+  image: registry.fly.io/claimcheck:deployment-01KJ3CQFVYAYPDTKEKYYFD8E24
+  machine_id: "287e004b117748"
+
+network:
+  shared_ipv4: "66.241.124.231"
+  dedicated_ipv6: "2a09:8280:1::d7:747d:0"
+  dns_verified: true
+
+storage:
+  volume_name: app_data
+  volume_id: vol_v3l89jy9w6xdqlxv
+  size_gb: 1
+  encrypted: true
+  snapshots_enabled: true
+
+config_files:
+  fly_toml: fly.toml
+  ci_deploy_workflow: .github/workflows/deploy-fly.yml
+
+apps_created_this_session:
+  - name: claimcheck-0222-10737
+    note: temporary new app created first
+  - name: claimcheck
+    note: final app selected for claimcheck.fly.dev

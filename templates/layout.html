@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claimcheck</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              400: '#38bdf8',
+              500: '#0ea5e9'
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="min-h-full bg-[radial-gradient(circle_at_85%_-10%,#1e293b,#020617_45%)] text-slate-100 antialiased">
+  <main class="mx-auto max-w-6xl px-4 py-4 lg:py-6">
+    <header class="relative mb-5 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-900/90 p-6 md:p-8">
+      <div class="pointer-events-none absolute -bottom-28 -right-24 h-72 w-72 rounded-full bg-cyan-400/20 blur-3xl"></div>
+      <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div class="leading-tight">
+          <span class="block text-xl font-semibold tracking-wide text-slate-100 md:text-2xl">Claimcheck</span>
+          <span class="text-[11px] uppercase tracking-[0.14em] text-brand-400">Token Testing Workbench</span>
+        </div>
+        <a class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 transition hover:border-brand-500/70 hover:text-brand-400 md:text-base" href="/skills.md">Agent Skill</a>
+      </div>
+      <p class="text-xs uppercase tracking-[0.16em] text-brand-400">Auth & Token Playground</p>
+      <h1 class="mt-2 text-4xl font-bold tracking-tight text-white md:text-6xl">Claimcheck Provider Console</h1>
+      <p class="mt-4 max-w-4xl text-base leading-7 text-slate-300 md:text-lg">
+        Create, inspect, and validate auth tokens with provider-specific workflows and public discovery endpoints.
+      </p>
+      <div class="mt-5 flex flex-wrap gap-2 text-xs md:text-sm">
+        <span class="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-slate-300">Token creation</span>
+        <span class="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-slate-300">JWT payload inspection</span>
+        <span class="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-slate-300">OIDC/JWKS verification</span>
+      </div>
+    </header>
+
+    <section id="providers" class="mt-4 rounded-2xl border border-slate-700/80 bg-slate-900/80 p-5">
+      <div class="flex items-center justify-between gap-3">
+        <h2 class="text-xl font-semibold text-white">Available Providers</h2>
+        <span class="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">{{ len .providers }} available</span>
+      </div>
+      <div class="mt-3 space-y-3">
+      {{ range .providers }}
+      <a class="group block rounded-xl border border-slate-700 bg-slate-900/80 p-4 transition hover:border-brand-500/60 hover:bg-slate-900/95" href="/providers/{{ .Provider }}">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="flex items-center gap-2">
+              <h3 class="text-2xl font-semibold text-white">{{ .DisplayName }}</h3>
+              <span class="rounded-full border border-slate-600 px-2.5 py-1 text-xs text-slate-300">{{ .Provider }}</span>
+            </div>
+            <p class="mt-2 text-base leading-7 text-slate-300">{{ .Description }}</p>
+          </div>
+          <span class="mt-1 inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-600 text-slate-300 transition group-hover:border-brand-500/70 group-hover:text-brand-400">→</span>
+        </div>
+      </a>
+      {{ end }}
+      </div>
+    </section>
+
+    <section id="well-known" class="mt-4 rounded-2xl border border-slate-700/80 bg-slate-900/80 p-5">
+      <h2 class="text-lg font-semibold text-white">Public Well-Known URLs</h2>
+      <div class="mt-3 grid gap-3 md:grid-cols-2">
+        <a class="rounded-xl border border-slate-700 bg-slate-900/80 p-3 transition hover:border-brand-500/60" href="/.well-known/openid-configuration">
+          <span class="block text-xs uppercase tracking-wide text-slate-400">OIDC Discovery</span>
+          <code class="mt-1 block break-all text-sm text-cyan-300">/.well-known/openid-configuration</code>
+        </a>
+        <a class="rounded-xl border border-slate-700 bg-slate-900/80 p-3 transition hover:border-brand-500/60" href="/.well-known/jwks.json">
+          <span class="block text-xs uppercase tracking-wide text-slate-400">JWKS</span>
+          <code class="mt-1 block break-all text-sm text-cyan-300">/.well-known/jwks.json</code>
+        </a>
+      </div>
+    </section>
+
+    <section id="about" class="mt-4 rounded-2xl border border-slate-700/80 bg-slate-900/80 p-5">
+      <h2 class="text-lg font-semibold text-slate-100">About</h2>
+      <p class="mt-2 max-w-4xl text-sm leading-6 text-slate-300">
+        Claimcheck is a public token testing workbench for Kubernetes service account authentication flows.
+        It helps you create tokens, inspect JWT payloads, and validate trust integration through standard
+        OpenID discovery and JWKS endpoints.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

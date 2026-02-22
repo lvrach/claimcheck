@@ -1,0 +1,46 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - decorder
+    - depguard
+    - errcheck
+    - forbidigo
+    - gosec
+    - govet
+    - ineffassign
+    - makezero
+    - misspell
+    - nilerr
+    - nilnil
+    - revive
+    - rowserrcheck
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - wastedassign
+
+  settings:
+    depguard:
+      rules:
+        main:
+          list-mode: lax
+          files:
+            - "$all"
+          deny:
+            - pkg: github.com/json-iterator/go
+              desc: use encoding/json for consistency
+    forbidigo:
+      forbid:
+        - pattern: ^fmt\.Print
+          msg: use structured logging instead of stdout prints
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

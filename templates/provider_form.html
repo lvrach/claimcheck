@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claimcheck - {{ .DisplayName }}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="container">
+    <header class="header-row">
+      <div>
+        <h1>{{ .DisplayName }}</h1>
+        <p>{{ .Description }}</p>
+      </div>
+      <a class="button-link muted" href="/">All providers</a>
+    </header>
+
+    <div class="workflow-grid">
+      <section class="panel">
+        <h2>Create token</h2>
+        <form id="mint-form" class="form-grid" novalidate>
+          {{ range .Fields }}
+            {{ if eq .Type "string" }}
+            <label>
+              {{ .Name }}{{ if .Required }} *{{ end }}
+              <input type="text" name="{{ .Name }}" {{ if .Required }}required{{ end }} placeholder="{{ .Example }}">
+              <small>{{ .Description }}</small>
+            </label>
+            {{ end }}
+
+            {{ if eq .Type "integer" }}
+            <label>
+              {{ .Name }}
+              <input type="number" name="{{ .Name }}" min="1" value="{{ .Default }}">
+              <small>{{ .Description }}</small>
+            </label>
+            {{ end }}
+
+            {{ if eq .Type "string_array" }}
+            <label>
+              {{ .Name }} (one per line)
+              <textarea name="{{ .Name }}" rows="3" placeholder="{{ .Default }}"></textarea>
+              <small>{{ .Description }}</small>
+            </label>
+            {{ end }}
+
+            {{ if eq .Type "object" }}
+            <label class="span-full">
+              {{ .Name }} JSON
+              <textarea name="{{ .Name }}" rows="8" spellcheck="false">{}</textarea>
+              <small>{{ .Description }}</small>
+            </label>
+            {{ end }}
+          {{ end }}
+
+          <div class="form-actions span-full">
+            <button type="submit">Claim Token</button>
+            <span id="mint-status" class="status"></span>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Token output</h2>
+        <label>
+          JWT
+          <textarea id="token-output" rows="8" readonly placeholder="Mint a token to see output"></textarea>
+        </label>
+        <p id="expires-at" class="meta"></p>
+        <div class="actions-row">
+          <button id="copy-btn" type="button" disabled>Copy token</button>
+          <button id="download-btn" type="button" disabled>Download .txt</button>
+          <span id="copy-status" class="status"></span>
+        </div>
+
+        <label class="span-full">
+          JWT Payload (decoded)
+          <textarea id="jwt-payload-output" rows="10" readonly placeholder="Decoded payload will appear after token creation"></textarea>
+        </label>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>Well-Known URLs</h2>
+      <ul>
+        <li><a href="/.well-known/openid-configuration"><code>/.well-known/openid-configuration</code></a></li>
+        <li><a href="/.well-known/jwks.json"><code>/.well-known/jwks.json</code></a></li>
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const provider = "{{ .Provider }}";
+      const form = document.getElementById('mint-form');
+      const statusEl = document.getElementById('mint-status');
+      const outputEl = document.getElementById('token-output');
+      const expiresEl = document.getElementById('expires-at');
+      const copyBtn = document.getElementById('copy-btn');
+      const downloadBtn = document.getElementById('download-btn');
+      const copyStatus = document.getElementById('copy-status');
+      const jwtPayloadOutput = document.getElementById('jwt-payload-output');
+
+      function setStatus(el, message, kind) {
+        el.textContent = message || '';
+        el.classList.remove('error', 'success');
+        if (kind) {
+          el.classList.add(kind);
+        }
+      }
+
+      function parseLines(value) {
+        return value.split('\n').map(v => v.trim()).filter(Boolean);
+      }
+
+      function decodeJWTPart(tokenPart) {
+        const normalized = tokenPart.replace(/-/g, '+').replace(/_/g, '/');
+        const padLen = (4 - (normalized.length % 4)) % 4;
+        const padded = normalized + '='.repeat(padLen);
+        return atob(padded);
+      }
+
+      function renderTokenDetails(token) {
+        jwtPayloadOutput.value = '';
+        if (!token) return;
+
+        const parts = token.split('.');
+        if (parts.length >= 2) {
+          try {
+            const payloadRaw = decodeJWTPart(parts[1]);
+            const payloadObj = JSON.parse(payloadRaw);
+            jwtPayloadOutput.value = JSON.stringify(payloadObj, null, 2);
+          } catch (err) {
+            jwtPayloadOutput.value = 'Unable to decode JWT payload: ' + err.message;
+          }
+        }
+      }
+
+      function readPayload() {
+        const namespace = form.elements.namedItem('namespace')?.value.trim() || '';
+        const serviceAccount = form.elements.namedItem('serviceAccount')?.value.trim() || '';
+        const audiencesRaw = form.elements.namedItem('audiences')?.value || '';
+        const expirationRaw = form.elements.namedItem('expirationSeconds')?.value || '';
+        const extraClaimsRaw = form.elements.namedItem('extraClaims')?.value || '{}';
+
+        let extraClaims = {};
+        try {
+          extraClaims = JSON.parse(extraClaimsRaw);
+          if (typeof extraClaims !== 'object' || extraClaims === null || Array.isArray(extraClaims)) {
+            throw new Error('extraClaims must be a JSON object');
+          }
+        } catch (err) {
+          throw new Error('Invalid extraClaims JSON: ' + err.message);
+        }
+
+        const payload = {
+          namespace,
+          serviceAccount,
+          audiences: parseLines(audiencesRaw),
+          extraClaims
+        };
+
+        if (expirationRaw !== '') {
+          payload.expirationSeconds = Number(expirationRaw);
+        }
+
+        return payload;
+      }
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        setStatus(statusEl, '', '');
+        setStatus(copyStatus, '', '');
+
+        let payload;
+        try {
+          payload = readPayload();
+        } catch (err) {
+          setStatus(statusEl, err.message, 'error');
+          return;
+        }
+
+        if (!payload.namespace || !payload.serviceAccount) {
+          setStatus(statusEl, 'namespace and serviceAccount are required', 'error');
+          return;
+        }
+
+        try {
+          const resp = await fetch(`/api/v1/providers/${provider}/mint`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const body = await resp.json();
+          if (!resp.ok) {
+            setStatus(statusEl, body.error || 'Mint request failed', 'error');
+            return;
+          }
+          outputEl.value = body.token || '';
+          renderTokenDetails(body.token || '');
+          expiresEl.textContent = body.expirationTimestamp ? `Expires: ${body.expirationTimestamp}` : '';
+          copyBtn.disabled = !body.token;
+          downloadBtn.disabled = !body.token;
+          setStatus(statusEl, 'Token created', 'success');
+        } catch (err) {
+          setStatus(statusEl, 'Request failed: ' + err.message, 'error');
+        }
+      });
+
+      copyBtn.addEventListener('click', async () => {
+        setStatus(copyStatus, '', '');
+        const token = outputEl.value;
+        if (!token) return;
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(token);
+          } else {
+            outputEl.select();
+            document.execCommand('copy');
+          }
+          setStatus(copyStatus, 'Copied', 'success');
+        } catch (err) {
+          setStatus(copyStatus, 'Copy failed', 'error');
+        }
+      });
+
+      downloadBtn.addEventListener('click', () => {
+        const token = outputEl.value;
+        if (!token) return;
+        const blob = new Blob([token + '\n'], { type: 'text/plain;charset=utf-8' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${provider}-token.txt`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+      });
+    })();
+  </script>
+</body>
+</html>
