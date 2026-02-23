@@ -1,8 +1,8 @@
-// Package main provides an extensible token testing web service.
-package main
+package provider
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -12,80 +12,41 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var errUnauthenticatedToken = errors.New("unauthenticated token")
-
-type MintInput struct {
-	Namespace         string         `json:"namespace"`
-	ServiceAccount    string         `json:"serviceAccount"`
-	Audiences         []string       `json:"audiences"`
-	ExpirationSeconds int64          `json:"expirationSeconds"`
-	ExtraClaims       map[string]any `json:"extraClaims"`
+// K8sConfig holds the configuration needed by the K8s SA provider.
+type K8sConfig struct {
+	IssuerURL          string
+	DefaultAudience    string
+	MinTTL             time.Duration
+	MaxTTL             time.Duration
+	MaxClaimFields     int
+	MaxClaimDepth      int
+	MaxClaimValueBytes int
+	Kid                string
+	PrivateKey         ed25519.PrivateKey
+	PublicKey          ed25519.PublicKey
 }
 
-type MintOutput struct {
-	Token               string    `json:"token"`
-	ExpirationTimestamp time.Time `json:"expirationTimestamp"`
-}
-
-type ReviewInput struct {
-	Token     string   `json:"token"`
-	Audiences []string `json:"audiences"`
-}
-
-type ReviewOutput struct {
-	Authenticated bool                `json:"authenticated"`
-	Username      string              `json:"username,omitempty"`
-	UID           string              `json:"uid,omitempty"`
-	Groups        []string            `json:"groups,omitempty"`
-	Extra         map[string][]string `json:"extra,omitempty"`
-	Claims        map[string]any      `json:"claims,omitempty"`
-	Error         string              `json:"error,omitempty"`
-}
-
-type ProviderSchema struct {
-	Provider    string         `json:"provider"`
-	DisplayName string         `json:"displayName"`
-	Description string         `json:"description"`
-	Fields      []SchemaField  `json:"fields"`
-	MintJSON    map[string]any `json:"mintRequest"`
-	ReviewJSON  map[string]any `json:"reviewRequest"`
-	Limits      map[string]any `json:"limits"`
-}
-
-type SchemaField struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Required    bool   `json:"required"`
-	Description string `json:"description"`
-	Default     any    `json:"default,omitempty"`
-	Example     any    `json:"example,omitempty"`
-}
-
-type TokenProvider interface {
-	ID() string
-	Description() string
-	Mint(ctx context.Context, in MintInput) (MintOutput, error)
-	Review(ctx context.Context, in ReviewInput) (ReviewOutput, error)
-	Schema() ProviderSchema
-}
-
+// K8sSAProvider implements TokenProvider for Kubernetes service account tokens.
 type K8sSAProvider struct {
-	cfg  Config
-	keys KeyMaterial
+	cfg K8sConfig
 }
 
-func NewK8sSAProvider(cfg Config, keys KeyMaterial) *K8sSAProvider {
-	return &K8sSAProvider{cfg: cfg, keys: keys}
+// NewK8sSAProvider creates a new Kubernetes service account token provider.
+func NewK8sSAProvider(cfg K8sConfig) *K8sSAProvider {
+	return &K8sSAProvider{cfg: cfg}
 }
 
+// ID returns the provider identifier.
 func (p *K8sSAProvider) ID() string { return "k8s-sa" }
 
+// Description returns a human-readable description of the provider.
 func (p *K8sSAProvider) Description() string {
 	return "High-fidelity Kubernetes service account token provider"
 }
 
-func (p *K8sSAProvider) Schema() ProviderSchema {
-	return ProviderSchema{
+// Schema returns the provider's schema including fields and limits.
+func (p *K8sSAProvider) Schema() Schema {
+	return Schema{
 		Provider:    p.ID(),
 		DisplayName: "Kubernetes Service Account",
 		Description: p.Description(),
@@ -146,11 +107,12 @@ func (p *K8sSAProvider) Schema() ProviderSchema {
 	}
 }
 
+// Mint creates a signed Kubernetes service account token from the given input.
 func (p *K8sSAProvider) Mint(_ context.Context, in MintInput) (MintOutput, error) {
 	if in.Namespace == "" || in.ServiceAccount == "" {
 		return MintOutput{}, errors.New("namespace and serviceAccount are required")
 	}
-	if err := validateClaims(in.ExtraClaims, p.cfg.MaxClaimFields, p.cfg.MaxClaimDepth, p.cfg.MaxClaimValueBytes); err != nil {
+	if err := ValidateClaims(in.ExtraClaims, p.cfg.MaxClaimFields, p.cfg.MaxClaimDepth, p.cfg.MaxClaimValueBytes); err != nil {
 		return MintOutput{}, err
 	}
 	forbidden := []string{"iss", "iat", "exp", "nbf", "sub", "jti", "aud"}
@@ -212,8 +174,8 @@ func (p *K8sSAProvider) Mint(_ context.Context, in MintInput) (MintOutput, error
 	maps.Copy(claims, in.ExtraClaims)
 
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	token.Header["kid"] = p.keys.Kid
-	signed, err := token.SignedString(p.keys.PrivateKey)
+	token.Header["kid"] = p.cfg.Kid
+	signed, err := token.SignedString(p.cfg.PrivateKey)
 	if err != nil {
 		return MintOutput{}, fmt.Errorf("sign token: %w", err)
 	}
@@ -221,6 +183,7 @@ func (p *K8sSAProvider) Mint(_ context.Context, in MintInput) (MintOutput, error
 	return MintOutput{Token: signed, ExpirationTimestamp: exp}, nil
 }
 
+// Review validates and extracts claims from a Kubernetes service account token.
 func (p *K8sSAProvider) Review(_ context.Context, in ReviewInput) (ReviewOutput, error) {
 	if in.Token == "" {
 		return ReviewOutput{}, errors.New("token is required")
@@ -233,10 +196,10 @@ func (p *K8sSAProvider) Review(_ context.Context, in ReviewInput) (ReviewOutput,
 		if t.Method.Alg() != jwt.SigningMethodEdDSA.Alg() {
 			return nil, fmt.Errorf("unexpected signing method %s", t.Method.Alg())
 		}
-		if kid, _ := t.Header["kid"].(string); kid != "" && kid != p.keys.Kid {
+		if kid, _ := t.Header["kid"].(string); kid != "" && kid != p.cfg.Kid {
 			return nil, fmt.Errorf("unknown kid")
 		}
-		return p.keys.PublicKey, nil
+		return p.cfg.PublicKey, nil
 	},
 		jwt.WithIssuer(p.cfg.IssuerURL),
 		jwt.WithExpirationRequired(),
@@ -244,7 +207,7 @@ func (p *K8sSAProvider) Review(_ context.Context, in ReviewInput) (ReviewOutput,
 		jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
 	)
 	if parseErr != nil {
-		return ReviewOutput{Authenticated: false, Error: parseErr.Error()}, errUnauthenticatedToken
+		return ReviewOutput{Authenticated: false, Error: parseErr.Error()}, ErrUnauthenticatedToken
 	}
 
 	claims, ok := parsed.Claims.(jwt.MapClaims)
@@ -253,8 +216,8 @@ func (p *K8sSAProvider) Review(_ context.Context, in ReviewInput) (ReviewOutput,
 	}
 
 	if len(in.Audiences) > 0 {
-		audClaim := parseAudience(claims["aud"])
-		if !audIntersect(audClaim, in.Audiences) {
+		audClaim := ParseAudience(claims["aud"])
+		if !AudIntersect(audClaim, in.Audiences) {
 			return ReviewOutput{Authenticated: false, Error: "audience mismatch"}, nil
 		}
 	}
@@ -269,7 +232,7 @@ func (p *K8sSAProvider) Review(_ context.Context, in ReviewInput) (ReviewOutput,
 
 	groups := []string{"system:serviceaccounts", "system:authenticated"}
 	extra := map[string][]string{}
-	if ns, sa, ok := parseServiceAccountSub(sub); ok {
+	if ns, sa, ok := ParseServiceAccountSub(sub); ok {
 		groups = append(groups, "system:serviceaccounts:"+ns)
 		extra["serviceaccount.name"] = []string{sa}
 		extra["serviceaccount.namespace"] = []string{ns}
@@ -285,18 +248,20 @@ func (p *K8sSAProvider) Review(_ context.Context, in ReviewInput) (ReviewOutput,
 	}, nil
 }
 
-func jwkFromKey(keys KeyMaterial) map[string]any {
+// JWKFromKey converts Ed25519 key material into a JWK map for JWKS endpoints.
+func JWKFromKey(kid string, pub ed25519.PublicKey) map[string]any {
 	return map[string]any{
 		"kty": "OKP",
 		"use": "sig",
 		"alg": "EdDSA",
 		"crv": "Ed25519",
-		"kid": keys.Kid,
-		"x":   base64.RawURLEncoding.EncodeToString(keys.PublicKey),
+		"kid": kid,
+		"x":   base64.RawURLEncoding.EncodeToString(pub),
 	}
 }
 
-func parseAudience(v any) []string {
+// ParseAudience extracts audience strings from a JWT claim value.
+func ParseAudience(v any) []string {
 	switch t := v.(type) {
 	case string:
 		if t == "" {
@@ -318,7 +283,8 @@ func parseAudience(v any) []string {
 	}
 }
 
-func audIntersect(a, b []string) bool {
+// AudIntersect returns true if the two audience lists share at least one entry.
+func AudIntersect(a, b []string) bool {
 	set := map[string]struct{}{}
 	for _, v := range a {
 		set[v] = struct{}{}
@@ -331,7 +297,9 @@ func audIntersect(a, b []string) bool {
 	return false
 }
 
-func parseServiceAccountSub(sub string) (namespace, sa string, ok bool) {
+// ParseServiceAccountSub parses a Kubernetes subject string like
+// "system:serviceaccount:namespace:name" into its parts.
+func ParseServiceAccountSub(sub string) (namespace, sa string, ok bool) {
 	parts := splitN(sub, ':', 4)
 	if len(parts) != 4 {
 		return "", "", false

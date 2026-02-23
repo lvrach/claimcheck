@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"claimcheck/internal/ratelimit"
 )
 
 func newTestServer(t *testing.T) *Server {
@@ -253,11 +255,11 @@ func TestK8sTokenReviewAcceptsExtraFields(t *testing.T) {
 
 func TestClientIPUsesRightmostXFF(t *testing.T) {
 	tests := []struct {
-		name     string
-		xff      string
-		flyIP    string
-		remote   string
-		wantIP   string
+		name   string
+		xff    string
+		flyIP  string
+		remote string
+		wantIP string
 	}{
 		{"rightmost xff", "spoofed, real-client", "", "1.2.3.4:1234", "real-client"},
 		{"fly-client-ip preferred", "spoofed", "fly-ip", "1.2.3.4:1234", "fly-ip"},
@@ -282,29 +284,20 @@ func TestClientIPUsesRightmostXFF(t *testing.T) {
 	}
 }
 
-func TestLimiterEvictsStaleEntries(t *testing.T) {
-	l := &IPLimiter{
-		clients: map[string]*tokenBucket{},
-		rps:     10,
-		burst:   10,
+func TestLimiterBurstAndDeny(t *testing.T) {
+	l := ratelimit.NewLimiter(10, 10)
+
+	for i := range 10 {
+		if !l.Allow("test-ip") {
+			t.Fatalf("request %d should be allowed", i+1)
+		}
 	}
-
-	// Populate with a stale entry.
-	staleTime := time.Now().Add(-15 * time.Minute)
-	l.clients["stale-ip"] = &tokenBucket{tokens: 10, last: staleTime}
-
-	// Force sweep by advancing the call counter to a multiple of 1000.
-	l.calls = 999
-	l.lastSweep = time.Now().Add(-10 * time.Minute)
-
-	// This call triggers a sweep.
-	l.Allow("fresh-ip")
-
-	if _, exists := l.clients["stale-ip"]; exists {
-		t.Fatal("expected stale entry to be evicted")
+	if l.Allow("test-ip") {
+		t.Fatal("expected rate limit to deny request after burst")
 	}
-	if _, exists := l.clients["fresh-ip"]; !exists {
-		t.Fatal("expected fresh entry to exist")
+	// Different key should still be allowed.
+	if !l.Allow("other-ip") {
+		t.Fatal("different IP should be allowed")
 	}
 }
 

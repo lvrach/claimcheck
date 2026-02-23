@@ -1,10 +1,11 @@
-package main
+package provider
 
 import (
 	"fmt"
 )
 
-func validateClaims(claims map[string]any, maxFields, maxDepth, maxValueBytes int) error {
+// ValidateClaims checks that extra claims don't exceed configured limits.
+func ValidateClaims(claims map[string]any, maxFields, maxDepth, maxValueBytes int) error {
 	if len(claims) > maxFields {
 		return fmt.Errorf("too many claim fields")
 	}

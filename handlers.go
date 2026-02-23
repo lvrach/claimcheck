@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"claimcheck/internal/provider"
 )
 
 func (s *Server) handleSkillsJSON(w http.ResponseWriter, _ *http.Request) {
@@ -57,7 +59,7 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleJWKS(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"keys": []any{jwkFromKey(s.keys)}})
+	writeJSON(w, http.StatusOK, map[string]any{"keys": []any{provider.JWKFromKey(s.keys.Kid, s.keys.PublicKey)}})
 }
 
 func (s *Server) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
@@ -90,12 +92,12 @@ func (s *Server) handleProviders(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleProviderSchema(w http.ResponseWriter, r *http.Request) {
 	providerID := r.PathValue("provider")
-	provider, ok := getProvider(s, providerID)
+	p, ok := getProvider(s, providerID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
 		return
 	}
-	writeJSON(w, http.StatusOK, provider.Schema())
+	writeJSON(w, http.StatusOK, p.Schema())
 }
 
 func (s *Server) handleProviderMint(w http.ResponseWriter, r *http.Request) {
@@ -104,16 +106,16 @@ func (s *Server) handleProviderMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	providerID := r.PathValue("provider")
-	provider, ok := getProvider(s, providerID)
+	p, ok := getProvider(s, providerID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
 		return
 	}
-	var in MintInput
+	var in provider.MintInput
 	if !decodeJSONBody(w, r, s.cfg.MaxBodyBytes, &in) {
 		return
 	}
-	out, err := provider.Mint(r.Context(), in)
+	out, err := p.Mint(r.Context(), in)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -127,18 +129,18 @@ func (s *Server) handleProviderReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	providerID := r.PathValue("provider")
-	provider, ok := getProvider(s, providerID)
+	p, ok := getProvider(s, providerID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
 		return
 	}
-	var in ReviewInput
+	var in provider.ReviewInput
 	if !decodeJSONBody(w, r, s.cfg.MaxBodyBytes, &in) {
 		return
 	}
-	out, err := provider.Review(r.Context(), in)
+	out, err := p.Review(r.Context(), in)
 	if err != nil {
-		if errors.Is(err, errUnauthenticatedToken) {
+		if errors.Is(err, provider.ErrUnauthenticatedToken) {
 			writeJSON(w, http.StatusOK, out)
 			return
 		}
@@ -161,14 +163,14 @@ func (s *Server) handleK8sTokenRequest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
-	provider, _ := getProvider(s, "k8s-sa")
+	p, _ := getProvider(s, "k8s-sa")
 
 	var req tokenRequest
 	if !decodeJSONBodyOpts(w, r, s.cfg.MaxBodyBytes, &req, false) {
 		return
 	}
 
-	in := MintInput{
+	in := provider.MintInput{
 		Namespace:         r.PathValue("namespace"),
 		ServiceAccount:    r.PathValue("name"),
 		Audiences:         req.Spec.Audiences,
@@ -179,7 +181,7 @@ func (s *Server) handleK8sTokenRequest(w http.ResponseWriter, r *http.Request) {
 		in.ExtraClaims = map[string]any{}
 	}
 
-	out, err := provider.Mint(r.Context(), in)
+	out, err := p.Mint(r.Context(), in)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -207,15 +209,15 @@ func (s *Server) handleK8sTokenReview(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
-	provider, _ := getProvider(s, "k8s-sa")
+	p, _ := getProvider(s, "k8s-sa")
 
 	var req tokenReviewRequest
 	if !decodeJSONBodyOpts(w, r, s.cfg.MaxBodyBytes, &req, false) {
 		return
 	}
-	out, err := provider.Review(r.Context(), ReviewInput{Token: req.Spec.Token, Audiences: req.Spec.Audiences})
+	out, err := p.Review(r.Context(), provider.ReviewInput{Token: req.Spec.Token, Audiences: req.Spec.Audiences})
 	if err != nil {
-		if errors.Is(err, errUnauthenticatedToken) {
+		if errors.Is(err, provider.ErrUnauthenticatedToken) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"apiVersion": "authentication.k8s.io/v1",
 				"kind":       "TokenReview",
@@ -252,7 +254,7 @@ func (s *Server) handleK8sTokenReview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, _ *http.Request) {
-	providers := make([]ProviderSchema, 0, len(s.providers))
+	providers := make([]provider.Schema, 0, len(s.providers))
 	for _, p := range s.providers {
 		providers = append(providers, p.Schema())
 	}
@@ -263,12 +265,12 @@ func (s *Server) handleHome(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleProviderPage(w http.ResponseWriter, r *http.Request) {
 	providerID := r.PathValue("provider")
-	provider, ok := getProvider(s, providerID)
+	p, ok := getProvider(s, providerID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
 		return
 	}
-	if err := s.tmpl.ExecuteTemplate(w, "provider_form.html", provider.Schema()); err != nil {
+	if err := s.tmpl.ExecuteTemplate(w, "provider_form.html", p.Schema()); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("render provider form: %v", err)})
 	}
 }

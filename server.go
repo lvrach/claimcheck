@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
+
+	"claimcheck/internal/provider"
+	"claimcheck/internal/ratelimit"
 )
 
 //go:embed static templates skills.md
@@ -24,27 +26,13 @@ type Server struct {
 	cfg                Config
 	logger             *slog.Logger
 	keys               KeyMaterial
-	providers          map[string]TokenProvider
+	providers          map[string]provider.TokenProvider
 	tmpl               *template.Template
-	limiter            *IPLimiter
+	limiter            *ratelimit.Limiter
 	skillsMD           []byte
 	skillsETag         string
 	skillsLastModified time.Time
 	startedAt          time.Time
-}
-
-type IPLimiter struct {
-	mu        sync.Mutex
-	clients   map[string]*tokenBucket
-	rps       float64
-	burst     int
-	calls     int
-	lastSweep time.Time
-}
-
-type tokenBucket struct {
-	tokens float64
-	last   time.Time
 }
 
 func NewServer(logger *slog.Logger, cfg Config, keys KeyMaterial) (*Server, error) {
@@ -59,8 +47,21 @@ func NewServer(logger *slog.Logger, cfg Config, keys KeyMaterial) (*Server, erro
 	skillsHash := sha256.Sum256(skillsMD)
 	skillsETag := `"` + base64.RawURLEncoding.EncodeToString(skillsHash[:12]) + `"`
 
-	providers := map[string]TokenProvider{}
-	k8sProvider := NewK8sSAProvider(cfg, keys)
+	k8sCfg := provider.K8sConfig{
+		IssuerURL:          cfg.IssuerURL,
+		DefaultAudience:    cfg.DefaultAudience,
+		MinTTL:             cfg.MinTTL,
+		MaxTTL:             cfg.MaxTTL,
+		MaxClaimFields:     cfg.MaxClaimFields,
+		MaxClaimDepth:      cfg.MaxClaimDepth,
+		MaxClaimValueBytes: cfg.MaxClaimValueBytes,
+		Kid:                keys.Kid,
+		PrivateKey:         keys.PrivateKey,
+		PublicKey:          keys.PublicKey,
+	}
+
+	providers := map[string]provider.TokenProvider{}
+	k8sProvider := provider.NewK8sSAProvider(k8sCfg)
 	providers[k8sProvider.ID()] = k8sProvider
 
 	return &Server{
@@ -69,7 +70,7 @@ func NewServer(logger *slog.Logger, cfg Config, keys KeyMaterial) (*Server, erro
 		keys:               keys,
 		providers:          providers,
 		tmpl:               tmpl,
-		limiter:            &IPLimiter{clients: map[string]*tokenBucket{}, rps: cfg.RateLimitPerSecond, burst: cfg.RateLimitBurst},
+		limiter:            ratelimit.NewLimiter(cfg.RateLimitPerSecond, cfg.RateLimitBurst),
 		skillsMD:           skillsMD,
 		skillsETag:         skillsETag,
 		skillsLastModified: time.Now().UTC().Truncate(time.Second),
@@ -137,44 +138,7 @@ func (s *Server) allowRequest(r *http.Request) bool {
 	return s.limiter.Allow(ip)
 }
 
-const limiterSweepInterval = 5 * time.Minute
-const limiterStaleThreshold = 10 * time.Minute
-
-func (l *IPLimiter) Allow(key string) bool {
-	now := time.Now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.calls++
-	if l.calls%1000 == 0 && now.Sub(l.lastSweep) > limiterSweepInterval {
-		l.lastSweep = now
-		for k, b := range l.clients {
-			if now.Sub(b.last) > limiterStaleThreshold {
-				delete(l.clients, k)
-			}
-		}
-	}
-
-	bucket, ok := l.clients[key]
-	if !ok {
-		l.clients[key] = &tokenBucket{tokens: float64(l.burst - 1), last: now}
-		return true
-	}
-
-	elapsed := now.Sub(bucket.last).Seconds()
-	bucket.tokens += elapsed * l.rps
-	if bucket.tokens > float64(l.burst) {
-		bucket.tokens = float64(l.burst)
-	}
-	bucket.last = now
-	if bucket.tokens < 1 {
-		return false
-	}
-	bucket.tokens--
-	return true
-}
-
-func getProvider(s *Server, id string) (TokenProvider, bool) {
+func getProvider(s *Server, id string) (provider.TokenProvider, bool) {
 	p, ok := s.providers[id]
 	return p, ok
 }
