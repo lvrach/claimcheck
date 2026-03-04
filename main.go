@@ -27,6 +27,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("new server: %w", err)
 	}
+	defer srv.analytics.Close()
 
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.Port,

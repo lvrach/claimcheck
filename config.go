@@ -20,6 +20,9 @@ type Config struct {
 	MaxClaimFields     int
 	MaxClaimDepth      int
 	MaxClaimValueBytes int
+	// RudderStack analytics (opt-in: both vars must be set to enable)
+	RudderWriteKey  string
+	RudderDataPlane string
 }
 
 func loadConfig() (Config, error) {
@@ -36,6 +39,8 @@ func loadConfig() (Config, error) {
 		MaxClaimFields:     getEnvInt("MAX_CLAIM_FIELDS", 32),
 		MaxClaimDepth:      getEnvInt("MAX_CLAIM_DEPTH", 4),
 		MaxClaimValueBytes: getEnvInt("MAX_CLAIM_VALUE_BYTES", 2048),
+		RudderWriteKey:     getEnv("RUDDERSTACK_WRITE_KEY", ""),
+		RudderDataPlane:    getEnv("RUDDERSTACK_DATA_PLANE_URL", ""),
 	}
 
 	if cfg.MinTTL <= 0 || cfg.MaxTTL <= 0 || cfg.MaxTTL < cfg.MinTTL {

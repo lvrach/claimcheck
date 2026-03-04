@@ -29,6 +29,7 @@ type Server struct {
 	providers          map[string]provider.TokenProvider
 	tmpl               *template.Template
 	limiter            *ratelimit.Limiter
+	analytics          *Analytics
 	skillsMD           []byte
 	skillsETag         string
 	skillsLastModified time.Time
@@ -71,6 +72,7 @@ func NewServer(logger *slog.Logger, cfg Config, keys KeyMaterial) (*Server, erro
 		providers:          providers,
 		tmpl:               tmpl,
 		limiter:            ratelimit.NewLimiter(cfg.RateLimitPerSecond, cfg.RateLimitBurst),
+		analytics:          newAnalytics(cfg.RudderWriteKey, cfg.RudderDataPlane, logger),
 		skillsMD:           skillsMD,
 		skillsETag:         skillsETag,
 		skillsLastModified: time.Now().UTC().Truncate(time.Second),
@@ -186,7 +188,7 @@ func decodeJSONBodyOpts(w http.ResponseWriter, r *http.Request, maxBytes int64, 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if w.Header().Get("Link") == "" {
-		w.Header().Set("Link", "</skills.md>; rel=\"describedby\"")
+		w.Header().Set("Link", "<\/skills.md>; rel=\"describedby\"")
 	}
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
