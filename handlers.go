@@ -101,11 +101,15 @@ func (s *Server) handleProviderSchema(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProviderMint(w http.ResponseWriter, r *http.Request) {
+	providerID := r.PathValue("provider")
 	if !s.allowRequest(r) {
+		s.analytics.Track(clientIP(r), "Rate Limited", map[string]any{
+			"endpoint": "mint",
+			"provider": providerID,
+		})
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
-	providerID := r.PathValue("provider")
 	p, ok := getProvider(s, providerID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
@@ -117,18 +121,31 @@ func (s *Server) handleProviderMint(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := p.Mint(r.Context(), in)
 	if err != nil {
+		s.analytics.Track(clientIP(r), "Token Minted", map[string]any{
+			"provider": providerID,
+			"success":  false,
+			"error":    err.Error(),
+		})
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.analytics.Track(clientIP(r), "Token Minted", map[string]any{
+		"provider": providerID,
+		"success":  true,
+	})
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleProviderReview(w http.ResponseWriter, r *http.Request) {
+	providerID := r.PathValue("provider")
 	if !s.allowRequest(r) {
+		s.analytics.Track(clientIP(r), "Rate Limited", map[string]any{
+			"endpoint": "review",
+			"provider": providerID,
+		})
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
-	providerID := r.PathValue("provider")
 	p, ok := getProvider(s, providerID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
@@ -141,12 +158,25 @@ func (s *Server) handleProviderReview(w http.ResponseWriter, r *http.Request) {
 	out, err := p.Review(r.Context(), in)
 	if err != nil {
 		if errors.Is(err, provider.ErrUnauthenticatedToken) {
+			s.analytics.Track(clientIP(r), "Token Reviewed", map[string]any{
+				"provider":      providerID,
+				"authenticated": false,
+			})
 			writeJSON(w, http.StatusOK, out)
 			return
 		}
+		s.analytics.Track(clientIP(r), "Token Reviewed", map[string]any{
+			"provider":      providerID,
+			"authenticated": false,
+			"error":         err.Error(),
+		})
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.analytics.Track(clientIP(r), "Token Reviewed", map[string]any{
+		"provider":      providerID,
+		"authenticated": out.Authenticated,
+	})
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -160,6 +190,10 @@ type tokenRequest struct {
 
 func (s *Server) handleK8sTokenRequest(w http.ResponseWriter, r *http.Request) {
 	if !s.allowRequest(r) {
+		s.analytics.Track(clientIP(r), "Rate Limited", map[string]any{
+			"endpoint": "k8s_token_request",
+			"provider": "k8s-sa",
+		})
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
@@ -183,9 +217,22 @@ func (s *Server) handleK8sTokenRequest(w http.ResponseWriter, r *http.Request) {
 
 	out, err := p.Mint(r.Context(), in)
 	if err != nil {
+		s.analytics.Track(clientIP(r), "Token Minted", map[string]any{
+			"provider":        "k8s-sa",
+			"success":         false,
+			"error":           err.Error(),
+			"namespace":       in.Namespace,
+			"service_account": in.ServiceAccount,
+		})
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.analytics.Track(clientIP(r), "Token Minted", map[string]any{
+		"provider":        "k8s-sa",
+		"success":         true,
+		"namespace":       in.Namespace,
+		"service_account": in.ServiceAccount,
+	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"apiVersion": "authentication.k8s.io/v1",
@@ -206,6 +253,10 @@ type tokenReviewRequest struct {
 
 func (s *Server) handleK8sTokenReview(w http.ResponseWriter, r *http.Request) {
 	if !s.allowRequest(r) {
+		s.analytics.Track(clientIP(r), "Rate Limited", map[string]any{
+			"endpoint": "k8s_token_review",
+			"provider": "k8s-sa",
+		})
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
@@ -218,6 +269,10 @@ func (s *Server) handleK8sTokenReview(w http.ResponseWriter, r *http.Request) {
 	out, err := p.Review(r.Context(), provider.ReviewInput{Token: req.Spec.Token, Audiences: req.Spec.Audiences})
 	if err != nil {
 		if errors.Is(err, provider.ErrUnauthenticatedToken) {
+			s.analytics.Track(clientIP(r), "Token Reviewed", map[string]any{
+				"provider":      "k8s-sa",
+				"authenticated": false,
+			})
 			writeJSON(w, http.StatusOK, map[string]any{
 				"apiVersion": "authentication.k8s.io/v1",
 				"kind":       "TokenReview",
@@ -228,9 +283,19 @@ func (s *Server) handleK8sTokenReview(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		s.analytics.Track(clientIP(r), "Token Reviewed", map[string]any{
+			"provider":      "k8s-sa",
+			"authenticated": false,
+			"error":         err.Error(),
+		})
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+
+	s.analytics.Track(clientIP(r), "Token Reviewed", map[string]any{
+		"provider":      "k8s-sa",
+		"authenticated": out.Authenticated,
+	})
 
 	status := map[string]any{
 		"authenticated": out.Authenticated,
