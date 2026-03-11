@@ -101,8 +101,7 @@ func (s *Server) handleProviderSchema(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProviderMint(w http.ResponseWriter, r *http.Request) {
-	if !s.allowRequest(r) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+	if !s.checkRateLimit(w, r) {
 		return
 	}
 	providerID := r.PathValue("provider")
@@ -115,17 +114,21 @@ func (s *Server) handleProviderMint(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, s.cfg.MaxBodyBytes, &in) {
 		return
 	}
+	ip := clientIP(r)
 	out, err := p.Mint(r.Context(), in)
 	if err != nil {
+		s.tracker.TokenMintFailed(ip, providerID, err.Error())
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.tracker.TokenMinted(ip, providerID,
+		int64(time.Until(out.ExpirationTimestamp).Seconds()),
+		len(in.Audiences), len(in.ExtraClaims))
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleProviderReview(w http.ResponseWriter, r *http.Request) {
-	if !s.allowRequest(r) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+	if !s.checkRateLimit(w, r) {
 		return
 	}
 	providerID := r.PathValue("provider")
@@ -138,15 +141,19 @@ func (s *Server) handleProviderReview(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, s.cfg.MaxBodyBytes, &in) {
 		return
 	}
+	ip := clientIP(r)
 	out, err := p.Review(r.Context(), in)
 	if err != nil {
 		if errors.Is(err, provider.ErrUnauthenticatedToken) {
+			s.tracker.TokenReviewed(ip, providerID, false)
 			writeJSON(w, http.StatusOK, out)
 			return
 		}
+		s.tracker.TokenReviewFailed(ip, providerID, err.Error())
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.tracker.TokenReviewed(ip, providerID, out.Authenticated)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -159,8 +166,7 @@ type tokenRequest struct {
 }
 
 func (s *Server) handleK8sTokenRequest(w http.ResponseWriter, r *http.Request) {
-	if !s.allowRequest(r) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+	if !s.checkRateLimit(w, r) {
 		return
 	}
 	p, _ := getProvider(s, "k8s-sa")
@@ -181,11 +187,16 @@ func (s *Server) handleK8sTokenRequest(w http.ResponseWriter, r *http.Request) {
 		in.ExtraClaims = map[string]any{}
 	}
 
+	ip := clientIP(r)
 	out, err := p.Mint(r.Context(), in)
 	if err != nil {
+		s.tracker.TokenMintFailed(ip, "k8s-sa", err.Error())
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.tracker.TokenMinted(ip, "k8s-sa",
+		int64(time.Until(out.ExpirationTimestamp).Seconds()),
+		len(in.Audiences), len(in.ExtraClaims))
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"apiVersion": "authentication.k8s.io/v1",
@@ -205,8 +216,7 @@ type tokenReviewRequest struct {
 }
 
 func (s *Server) handleK8sTokenReview(w http.ResponseWriter, r *http.Request) {
-	if !s.allowRequest(r) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+	if !s.checkRateLimit(w, r) {
 		return
 	}
 	p, _ := getProvider(s, "k8s-sa")
@@ -215,9 +225,11 @@ func (s *Server) handleK8sTokenReview(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBodyOpts(w, r, s.cfg.MaxBodyBytes, &req, false) {
 		return
 	}
+	ip := clientIP(r)
 	out, err := p.Review(r.Context(), provider.ReviewInput{Token: req.Spec.Token, Audiences: req.Spec.Audiences})
 	if err != nil {
 		if errors.Is(err, provider.ErrUnauthenticatedToken) {
+			s.tracker.TokenReviewed(ip, "k8s-sa", false)
 			writeJSON(w, http.StatusOK, map[string]any{
 				"apiVersion": "authentication.k8s.io/v1",
 				"kind":       "TokenReview",
@@ -228,9 +240,11 @@ func (s *Server) handleK8sTokenReview(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		s.tracker.TokenReviewFailed(ip, "k8s-sa", err.Error())
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.tracker.TokenReviewed(ip, "k8s-sa", out.Authenticated)
 
 	status := map[string]any{
 		"authenticated": out.Authenticated,

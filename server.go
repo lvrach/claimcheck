@@ -29,6 +29,7 @@ type Server struct {
 	providers          map[string]provider.TokenProvider
 	tmpl               *template.Template
 	limiter            *ratelimit.Limiter
+	tracker            *Tracker
 	skillsMD           []byte
 	skillsETag         string
 	skillsLastModified time.Time
@@ -64,6 +65,11 @@ func NewServer(logger *slog.Logger, cfg Config, keys KeyMaterial) (*Server, erro
 	k8sProvider := provider.NewK8sSAProvider(k8sCfg)
 	providers[k8sProvider.ID()] = k8sProvider
 
+	tracker, err := newTracker(cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: %w", err)
+	}
+
 	return &Server{
 		cfg:                cfg,
 		logger:             logger,
@@ -71,11 +77,17 @@ func NewServer(logger *slog.Logger, cfg Config, keys KeyMaterial) (*Server, erro
 		providers:          providers,
 		tmpl:               tmpl,
 		limiter:            ratelimit.NewLimiter(cfg.RateLimitPerSecond, cfg.RateLimitBurst),
+		tracker:            tracker,
 		skillsMD:           skillsMD,
 		skillsETag:         skillsETag,
 		skillsLastModified: time.Now().UTC().Truncate(time.Second),
 		startedAt:          time.Now().UTC(),
 	}, nil
+}
+
+// Close flushes any buffered analytics events.
+func (s *Server) Close() {
+	s.tracker.Close()
 }
 
 func (s *Server) Handler() http.Handler {
@@ -136,6 +148,18 @@ func (s *Server) allowRequest(r *http.Request) bool {
 		ip = "unknown"
 	}
 	return s.limiter.Allow(ip)
+}
+
+// checkRateLimit returns true if the request is allowed.
+// If rate-limited, it writes a 429 response, fires a RateLimitExceeded
+// analytics event, and returns false.
+func (s *Server) checkRateLimit(w http.ResponseWriter, r *http.Request) bool {
+	if s.allowRequest(r) {
+		return true
+	}
+	s.tracker.RateLimitExceeded(clientIP(r), r.Method, r.URL.Path)
+	writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+	return false
 }
 
 func getProvider(s *Server, id string) (provider.TokenProvider, bool) {

@@ -20,6 +20,9 @@ type Config struct {
 	MaxClaimFields     int
 	MaxClaimDepth      int
 	MaxClaimValueBytes int
+	// RudderStack analytics — set RUDDER_WRITE_KEY to enable.
+	RudderWriteKey     string
+	RudderDataPlaneURL string
 }
 
 func loadConfig() (Config, error) {
@@ -36,6 +39,8 @@ func loadConfig() (Config, error) {
 		MaxClaimFields:     getEnvInt("MAX_CLAIM_FIELDS", 32),
 		MaxClaimDepth:      getEnvInt("MAX_CLAIM_DEPTH", 4),
 		MaxClaimValueBytes: getEnvInt("MAX_CLAIM_VALUE_BYTES", 2048),
+		RudderWriteKey:     getEnv("RUDDER_WRITE_KEY", ""),
+		RudderDataPlaneURL: getEnv("RUDDER_DATA_PLANE_URL", "https://hosted.rudderlabs.com"),
 	}
 
 	if cfg.MinTTL <= 0 || cfg.MaxTTL <= 0 || cfg.MaxTTL < cfg.MinTTL {
